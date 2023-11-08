@@ -1,0 +1,1228 @@
+---
+title: "Statistical Learning Project"
+author: "Daniele Barolo, Camilla Colanero, Nicolò Rinaldi"
+date: "25/07/2023"
+fontsize: 12pt
+output: 
+  pdf_document:
+    extra_dependencies: "subfig"
+---
+
+# Introduction
+
+This project centers around a binary classification problem involving the prediction of an individual's smoking history based on various health measurements. Smoking is a significant public health concern worldwide, contributing to a wide range of adverse health outcomes, including respiratory diseases, cardiovascular problems, and cancer. According to global statistics, smoking is responsible for millions of deaths each year and is a leading cause of preventable diseases.
+
+This project seeks to develop a predictive model that utilizes medical and personal data variables to determine whether an individual has ever smoked or not. By analyzing a dataset comprising health measurements and smoking history information, we aim to identify key indicators that can accurately classify individuals based on their smoking status.
+
+Accurate prediction models can provide valuable insights into the factors influencing smoking behavior and enable healthcare professionals to identify individuals at risk of smoking-related health issues. This research may contribute to the development of effective prevention and cessation programs tailored to specific populations, ultimately improving public health outcomes and reducing the burden of smoking-related diseases.
+
+## Libraries
+
+Here are listed all the libraries loaded during our study.
+
+```{r, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(DescTools)
+library(psych)
+library(corrplot)
+library(car)
+library(e1071)
+library(class)
+library(pROC)
+library(MASS)
+library(glmnet)
+library(knitr)
+library(kableExtra)
+```
+
+## Functions definitions
+
+In this section, we defined some functions that will be used throughout our analysis. These functions are designed to perform specific tasks and computations, making our code more organized and reusable.
+
+```{r}
+plot_yules <- function(yules_q_values, column_names) {
+  data <- data.frame(Column = column_names, Distance = yules_q_values)
+  sorted_data <- arrange(data, Distance)
+  ggplot(sorted_data, aes(x = Column, y = Distance)) +
+    geom_bar(stat = "identity", fill = ifelse(sorted_data$Distance < 0.1, "orange", "coral2")) +
+    geom_hline(yintercept = 0.1, col = "orange", lty = "dashed") +
+    geom_hline(yintercept = 0.05, col = "red", lty = "dashed") +
+    labs(x = "", y = "") +
+    ggtitle("Yule's Q between Categorical Variables and Target") +
+    theme_minimal() +
+    theme(panel.grid = element_blank()) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+}
+```
+
+```{r}
+accuracy_and_scores <- function(prob, threshold=0.5, probability = TRUE){
+  if (probability) {
+  pred <- rep(0, nrow(test))
+  pred[prob > threshold] <- 1
+  }
+  else { pred <- prob }
+  conf_mat <- table(test$Smoking, pred)
+  correct <- conf_mat[1,1] + conf_mat[2,2]
+  acc <- correct / nrow(test)
+  TPR <- conf_mat[2, 2]/sum(conf_mat[2, ]) # true positive rate
+  TNR <- conf_mat[1, 1]/sum(conf_mat[1, ]) # true negative rate
+  PREC <- conf_mat[2, 2]/sum(conf_mat[, 2]) # precision
+  REC <- conf_mat[2, 2]/sum(conf_mat[2, ]) # recall
+  F1_score <- 2 * (PREC * REC)/(PREC + REC) # F1 score
+
+  list(acc, TPR, TNR, PREC, REC, F1_score)
+}
+```
+
+## Loading Data
+
+### Body Signal of Smoking Dataset
+
+The dataset used in this analysis was obtained from the National Health Insurance Service in South Korea. It belongs to the National Priority Open Data for Health Examination Information and provides various health attributes, offering valuable insights into an individual's health status. The dataset is freely available for research, analysis, and policy-making purposes.
+
+Initially, the dataset was discovered on the Kaggle platform within the dedicated datasets area. However, since the dataset had already been preprocessed, we decided to retrieve the raw data directly from the [source repository](https://www.data.go.kr/data/15007122/fileData.do). Since the dataframe columns names were in Korean language, we changed them manually using an automatic translator.
+
+```{r echo = F, eval = T}
+# this block will run, but will not be shown in the Markdown: 
+# it's to avoid to display long filapath
+# the code below will instead be displayed but not run
+
+data <- read.csv('smoking_sporco.csv')
+
+```
+
+```{r echo = T, eval = F}
+data <- read.csv('smoking_dataset.CSV')
+```
+
+We started by looking at the description of the raw Dataset
+
+```{r}
+str(data, strict.width = "cut")
+```
+
+We noticed that too many variables names did not make much sense or were too long, probably due to the poor translation from the original korean name. We have then decided to rename them with more conventional names. Along with that, we also have identified the type of the variables. 
+
+```{r echo = F, eval = T}
+original_column_names  <- c("base.year", "subscriber.serial.number", 
+                  "attempt.code", "gender.code", "Age.code..5.years.old.",
+                  "Height..by.5cm.", "Weight..in.5Kg.increments.", 
+                  "Waist.circumference", "eyesight..left.", "eyesight..right.", 
+                  "hearing..left.", "hearing..right.", "systolic.blood.pressure",
+                  "diastolic.blood.pressure", 
+                  "Pre.meal.blood.sugar..fasting.blood.sugar.", 
+                  "total.cholesterol", "triglyceride", "HDL.cholesterol", 
+                  "LDL.cholesterol", "hemoglobin", "urine.protein",
+                  "serum.creatinine", "X.Serum.Geoty.AST", "X.Serum.Geoty..ALT", 
+                  "Gamma.GTP", "smoking.status", "drinking", "Oral.examination", 
+                  "Dental.caries", "tartar", "Data.Publication.Date")
+
+description <- c("Base year of the data collection",
+                  "Serial number of the subscriber",
+                  "Code indicating the city of origin",
+                  "Code representing the gender: Male (0) or Female (1)",
+                  "Code representing the age grouped in 5-year intervals",
+                  "Height measured in 5cm increments",
+                  "Weight measured in 5kg increments",
+                  "Waist circumference measurement",
+                  "Left eye eyesight measurement - 9.9 for blindness",
+                  "Right eye eyesight measurement - 9.9 for blindness",
+                  "Left ear hearing measurement",
+                  "Right ear hearing measurement",
+                  "Systolic blood pressure measurement",
+                  "Diastolic blood pressure measurement",
+                  "Pre-meal/fasting blood sugar measurement",
+                  "Total cholesterol measurement",
+                  "Triglyceride measurement",
+                  "HDL cholesterol measurement",
+                  "LDL cholesterol measurement",
+                  "Hemoglobin level measurement",
+                  "Urine protein measurement",
+                  "Serum creatinine level measurement",
+                  "AST (Aspartate Aminotransferase) level measurement",
+                  "ALT (Alanine Aminotransferase) level measurement",
+                  "Gamma-glutamyltransferase level measurement",
+                  "Smoking status of the individual",
+                  "Drinking status of the individual",
+                  "Oral examination results",
+                  "Presence of dental caries",
+                  "Presence of tartar",
+                  "Publication date of the data")
+
+# Define the new column names
+new_column_names <- c("Year", "Serial_Num", "Attempt_Code", "Gender_Code", "Age", 
+                      "Height", "Weight", "Waist_Circ", "Left_Eye", "Right_Eye", 
+                      "Left_Hearing", "Right_Hearing", "Systolic_BP", 
+                      "Diastolic_BP", "Blood_Sugar", "Total_Cholesterol", 
+                      "Triglyceride", "HDL_Cholesterol", "LDL_Cholesterol", 
+                      "Hemoglobin", "Urine_Protein", "Serum_Creatinine", "AST", 
+                      "ALT", "Gamma_GTP", "Smoking", "Drinking", "Oral_Exam", 
+                      "Dental_Caries", "Tartar", "Publication_Date")
+
+
+#Dividing Categorical vs Numerical
+cat_col <- c('Gender_Code', 'Drinking', 'Dental_Caries')
+ordinal_col <- c("Left_Hearing", "Right_Hearing", "Urine_Protein", "Tartar")
+num_col <- setdiff(names(data), c(cat_col, 'Smoking'))
+
+# Create a dataframe with original column names, modified column names, type 
+# and a brief explanations of the variables
+variable_description_table <- data.frame(Original_Name = original_column_names,
+                                         Modified_Name = new_column_names,
+                                         Description = description)
+
+
+# Create the 'type' column based on Modified_Name values
+variable_description_table$type <- ifelse(
+                                   variable_description_table$Modified_Name %in% 
+                                   c(cat_col, "Smoking"), "Categorical", ifelse(
+                                   variable_description_table$Modified_Name %in% 
+                                   ordinal_col, "Ordinal", "Numeric"))
+
+# replace the new names
+colnames(data) <- new_column_names
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(knitr)
+library(kableExtra)
+```
+
+A summary of the changes made, the type of the variables and a brief description for each of them was then gathered in the following table.
+
+```{r, echo = T, dpi=72}
+### Print the TABLE with a BRIEF DESCRIPITION of each variable ###
+
+cat_colors <- c("Categorical" = "#FAF0BE", "Ordinal" = "#7FFFD0", "Numeric" = "#00DDDD")
+cat_rows <- which(variable_description_table$type == "Categorical")
+ord_rows <- which(variable_description_table$type == "Ordinal")
+num_rows <- which(variable_description_table$type == "Numeric")
+
+variable_description_table %>%
+  kable(format = "latex", booktabs = TRUE) %>%
+  kable_styling(latex_options = "scale_down") %>%
+  row_spec(row = cat_rows, background = cat_colors["Categorical"]) %>%
+  row_spec(row = ord_rows, background = cat_colors["Ordinal"]) %>%
+  row_spec(row = num_rows, background = cat_colors["Numeric"])
+```
+
+The majority of our variables are indeed numerical.
+
+```{r, dpi=72}
+barplot(sort(table(variable_description_table$type), decreasing = TRUE), 
+col = c("Numeric" = "#00DDDD", "Categorical" = "#FAF0BE", "Ordinal" = "#7FFFD0"), 
+        main = "variables types count")
+```
+
+# Data Preprocessing
+
+## Removing not meaningful variables
+
+Firstly, we have deleted 'Publication_Date', 'Year', 'Serial_Num' and 'Attempt_Code' as they are identification variables and therefore are not relevant for our study.
+
+```{r}
+drop_cols <- c('Publication_Date', 'Year','Serial_Num', 'Attempt_Code')
+data <- data[ , !(names(data) %in% drop_cols)]
+```
+
+Secondly, we noticed that same variables had too many NA values: more than half of the total observations were missing.
+
+```{r, dpi=72}
+na_counts <- colSums(is.na(data))
+
+df_na <- data.frame(Variable = names(na_counts), NA_Count = na_counts)
+
+bar_colors <- ifelse(df_na$NA_Count > 500000, "red", "skyblue")
+
+barplot(df_na$NA_Count, names.arg = ifelse(df_na$NA_Count >= 500000, 
+                                           df_na$Variable, ""), xlab = "", 
+                         ylab = "NA Count", main = "NA Count for Each Variable", 
+                                    col = bar_colors, las = 3, cex.names = 0.6)
+
+legend("topleft", legend = c("more than 500k NAs", "less than 15k NAs"), 
+       fill = c("red", "skyblue"))
+
+```
+
+We therefore opted to remove these variables.
+
+```{r}
+na_col <- names(data[colSums(is.na(data))> 500000])
+data_no_col <- data[ , !(names(data) %in% na_col)]
+cat_col <- c('Gender_Code', 'Drinking') #update the categorical variables
+ordinal_col <- c("Left_Hearing", "Right_Hearing", "Urine_Protein")
+cat("Variables removed due to too many NAs:", sep = "\n",
+    paste(na_col, collapse = " - "), "\n")
+```
+
+Among the dropped columns, we have removed 'Tartar' and 'Dental_Caries' variables which were the only values related to a oral exam in our data collection. Thus, we don't need the 'Oral_Exam' variable anymore because it's no longer informative to know whether someone has taken or not an oral exam. Moreover, we have noticed that 0s values (= subject didn't take an oral exam) were obviously corresponding to the NA values of the two above mentioned columns.
+
+```{r}
+data_no_col <- data_no_col[ , !(names(data_no_col) %in% c('Oral_Exam'))]
+cat(paste(paste("0s in Oral Exam: ", table(data$Oral_Exam)[1]), 
+          paste("NAs in Tartar: ", sum(is.na(data$Tar))), 
+          sep = "     --------     "))
+```
+
+## Removing NAs
+
+Still, our Data presented NAs. To deal with that, we started by dropping the rows corresponding to the NA values in the target column.
+
+```{r}
+#target
+data_clean <- data_no_col[!is.na(data_no_col$Smoking),]
+```
+
+Then we moved to the Urine_Protein variable since it had more than 12 thousands NA values. We dropped the relative observations as well.
+
+```{r}
+data_clean <- data_clean[!is.na(data_clean$Urine_Protein),]
+```
+
+From the description of the dataset we read that in the hearing related variables the values assume this meaning: - 1: normal - 2: suspected disease - 3: not measurable We have therefore decided to treat the 3 values as missing ones and dropped them all. Finally, we added them in the categorical variables list.
+
+```{r}
+data_clean$Left_Hearing[data_clean$Left_Hearing %in% c(3)] <- NA
+data_clean <- data_clean[!is.na(data_clean$Left_Hearing),]
+data_clean$Right_Hearing[data_clean$Right_Hearing %in% c(3)] <- NA
+data_clean <- data_clean[!is.na(data_clean$Right_Hearing),]
+```
+
+Only few NAs were left. We replaced them either with the mode (for categorical or ordinal variables) or with the median (numerical variables).
+
+```{r}
+cat_col_with_na <- c('Drinking')
+for (i in 1:ncol(data_clean)){
+  if (names(data_clean[i]) %in% cat_col_with_na){
+    data_clean[is.na(data_clean[,i]), i] <- 
+                            as.numeric(names(which.max(table(data_clean[i]))))}
+  else{
+    data_clean[is.na(data_clean[,i]), i] <- median(data_clean[,i], na.rm =TRUE)}
+}
+#Finally, we got rid of all NAs :)
+colSums(is.na(data_clean))
+```
+
+The final dimension of the dataset without NA values is:
+
+```{r}
+dim(data_clean)
+```
+
+## Data adjustments
+
+### Categorical
+
+We observed that our categorical variables were binary.
+
+```{r}
+cat_col <- c(cat_col, "Left_Hearing", "Right_Hearing")
+for (col in cat_col) {
+  print(col)
+  print(unique(data_clean[, col])) }
+```
+
+For sake of clarity, we transformed 'Gender_Code' values to "M" (Male) or "F" (Female), 'Drinking' values to "Yes" or "No" and Hearing-related values to "Healthy" or "Atypical".
+
+```{r}
+#RUN ONLY ONCE
+data_clean$Gender_Code<-as.factor(ifelse(data_clean$Gender_Code == 1, "M", "F"))
+data_clean$Drinking <- as.factor(ifelse(data_clean$Drinking == 1, "Yes", "No"))
+data_clean$Left_Hearing <- as.factor(ifelse(
+                            data_clean$Left_Hearing == 1, "Healthy", "Atypical"))
+data_clean$Right_Hearing <- as.factor(ifelse(
+                            data_clean$Right_Hearing == 1, "Healthy", "Atypical"))
+```
+
+```{r}
+for (col in cat_col) {
+  print(col)
+  print(unique(data_clean[, col])) }
+```
+
+### Numerical
+
+In the dataset, the age of each individual has been categorized into bins of 5-year ranges, labeled from 0 to 9. To have simplified understanding of the values, we have chosen to assign each bin with the mean value between the minimum and maximum age within the respective age block. For instance, the age range of 40-45 years old would be labeled as 42.5.
+
+```{r}
+age_mapping <- c("9" = 42.5, "10" = 47.5, "11" = 52.5, "12" = 57.5, "13" = 62.5, 
+                "14" = 67.5, "15" = 72.5, "16" = 77.5, "17" = 82.5, "18" = 87.5)
+data_clean <- data_clean %>% mutate(Age = age_mapping[as.character(Age)])
+```
+
+## Outliers
+
+In order to retain as much information as possible, we made the decision to only remove outliers that were deemed medically implausible. We believe these outliers are likely to be mistakes during the data sampling process or account for very rare cases.
+
+-   Systolic_BP : if a person has an hypertension crisis (that is the case where the BPM are maximum) the systolic BPM would results in 180 or higher. Since it's very unlikely that the measurements were taken during one of these crisis, we decided to delete the values above 200 that are very high.
+
+```{r}
+data_clean <- subset(data_clean, Systolic_BP <= 200) 
+```
+
+-   Diastolic_BP : as for the systolic BPM, during an hypertension crisis the diastolic BPM is 120 or higher. For the same reasons as before, we hence delete the values above 130.
+
+```{r}
+data_clean <- subset(data_clean, Diastolic_BP < 130)
+```
+
+-   Blood_sugar: a person with a fasting blood sugar over 120, or a non-fasting blood sugar over 200, is diabetic. We have a few values that are very high, so we decided to delete the values above 400.
+
+```{r}
+data_clean <- subset(data_clean, Blood_Sugar < 400)
+```
+
+-   Hemoglobin: normal hemoglobin levels are different for men and women. For men, a normal level ranges between 14.0 grams per deciliter (gm/dL) and 17.5 gm/dL. For women, a normal level ranges between 12.3 gm/dL and 15.3 gm/dL. A severe low hemoglobin level for men is 13.5 gm/dL or lower. For women, a severe low hemoglobin level is 12 gm/dL. A value that is under 5 is definitely low, so we delete those. We also have a value of 25 that is definitely out of range, therefore we removed also those.
+
+```{r}
+data_clean <- subset(data_clean, Hemoglobin < 25)
+data_clean <- subset(data_clean, Hemoglobin > 5)
+```
+
+-   Serum_creatinine: Creatinine levels of 2 or more in infants and 5 or more in adults may indicate severe kidney damage. We have a value of 24 that is very high with respect to the others, therefore very rare. We decided to remove it. Terminal renal failure is defined as a kidney that has completely exhausted its function and its ability to filter and purify blood. In this case, dialysis or kidney transplantation is required. This is the reason why we decided to delete also the value 0 of creatinine level.
+
+```{r}
+data_clean <- subset(data_clean, Serum_Creatinine < 23)
+data_clean <- subset(data_clean, Serum_Creatinine > 0)
+```
+
+-   AST: Typically the range for normal AST is reported between 10 to 40 units per liter and ALT between 7 to 56 units per liter. Mild elevations are generally considered to be 2-3 times higher than the normal range. In some conditions, these enzymes can be severely elevated, in the 1000s range. Even though we could have some values above 500, we decided to eliminate them because they are very high with respect to the others and they appear only in 12 rows, so we do not lose much information.
+
+```{r}
+data_clean <- subset(data_clean, AST < 500)
+```
+
+-   ALT: For the same reasons as for AST, we deleted the values above 500. 
+
+```{r}
+data_clean <- subset(data_clean, ALT < 500)
+```
+
+-   Gamma_GTP: Normal test values range between 3.0 and 28.7 IU/L in women and between 3.3 and 35.0 IU/L in men. We have some values that are higher than 900, so we deleted them.
+
+```{r}
+data_clean <- subset(data_clean, Gamma_GTP < 900)
+```
+
+# Data Visualisation
+
+After completing the data preprocessing stage, our next step was to visually explore the data. One of our goals was to determine if we could simplify the problem from a three-category prediction to a binary problem.
+
+## Target visualisation
+
+To begin, we conducted a count of the occurrences for each value in the target variable to gain insights into its distribution.
+
+```{r, dpi=72}
+target_labels <- c("non-smoker (NS)", "former smoker (FS)", "current smoker (CS)")
+target_factor <- factor(data_clean$Smoking, levels = 1:3, labels = target_labels)
+label_colors <- c("non-smoker" = "white", 
+                  "former smoker" = "grey", 
+                  "current smoker" = "darkgrey")
+barplot(table(target_factor), main = 'Target distribution', col = label_colors, 
+        cex.names = 0.8, border = "black")
+```
+
+## Categorical Variables Visualisation
+
+Next, we examined the frequency of the categorical (binary) variables in relation to our target variable. The primary distinction emerged in the distribution of individuals who were non-smokers ('NS') compared to former ('FS') or current smokers ('CS'). Notably, the proportions of the categories grouped by 'FS (1)' and 'AS (2)' values exhibited a resemblance. For instance, both former smokers and current smokers are mostly composed by males, while the majority of non-smokers are indeed females.
+
+```{r, dpi=72}
+contingency_tables <- list()
+for (column in cat_col) {
+  contingency_tables[[column]]<-table(data_clean$Smoking, data_clean[[column]])
+}
+
+x_labels <- c("NS (0)","FS (1)", "CS(2)")  # Update x-axis labels
+
+values <- list(
+  list(c("lightpink", "lightblue"), c("F", "M")),
+  list(c("lightgreen", "purple"), c("No", "Yes")),
+  list(c("brown", "beige"), c("Atypical", "Healthy")),
+  list(c("brown", "beige"), c("Atypical", "Healthy"))
+)
+
+dictionary <- setNames(values, cat_col)
+par(mfrow = c(1, 2))
+main_title <- "Categorical Variable Visualisation" 
+
+for (column in names(contingency_tables)) {
+  table_data <- t(contingency_tables[[column]])
+  colors <- dictionary[[column]][[1]]
+  legend_names <- dictionary[[column]][[2]]
+  barplot(table_data, beside = FALSE, col = colors, xlab = "Smoking",
+          ylab = "Count", main = column, legend.text = legend_names, 
+          names.arg = x_labels, args.legend=list(x="topright", horiz=FALSE), 
+          cex.names = 0.85)
+}
+```
+
+```{r, echo = FALSE}
+par(mfrow = c(1, 1))
+```
+
+## Ordinal Variables Visualisation
+
+Similar as what was done for the categorical variables, we visualised the ordinal variables through barplots.
+
+```{r, dpi=72}
+
+table_urine <- t(table(data_clean$Smoking, data_clean$Urine_Protein))
+  
+mosaicplot(table_urine, col = heat.colors(nrow(table_urine), rev = TRUE),
+          main = "Urine_Protein",
+          sub = "1: little amount ---> 6: maximum amount", ylab = "Smoking status")
+```
+
+## Numerical Variables Visualisation
+
+By plotting the boxplots of the numerical variables, we compared the behavior of each predictor with respect to the three different classes of the Smoking target variable. On top of that, we added a violin plot in order to have an insight on the skewness and normality of the data distributions.
+
+```{r, fig.ncol = 2, out.width = "30%", dpi=25}
+# BOXPLOT ANALYSIS (numerical variables)
+num_col <- setdiff(names(data_clean), c(cat_col, ordinal_col, 'Smoking'))
+plots_per_image <- 1
+num_images <- ceiling(length(num_col) / plots_per_image) # Create images
+smoking_values <- c(1, 2, 3) # Smoking values to include
+main_exeptions <- list()
+
+for (i in 1:num_images) {
+  start_index <- (i - 1) * plots_per_image + 1
+  end_index <- min(start_index + plots_per_image - 1, length(num_col))
+  current_plots <- list()
+  
+  for (j in start_index:end_index) {
+    col <- num_col[j]
+    plot <- ggplot(data_clean[data_clean$Smoking %in% smoking_values,], 
+                   aes(x = Smoking, y = .data[[col]], group = Smoking)) +
+      geom_violin(aes(fill = factor(Smoking)), trim = FALSE) +
+      geom_boxplot(width = 0.1, fill = "white", color = "black") +
+      labs(x = "", y = "", title = col) +
+      scale_fill_manual(values = c("white", "lightgrey", "grey"), 
+                        name = "",
+                        labels = c("NS(1)", "FS (2)", "CS (3)"))
+    current_plots[[j - start_index + 1]] <- plot
+    if (col == "Age") {main_exeptions[[j]] <- plot}
+    if (col == "Height") {main_exeptions[[j]] <- plot}
+  }
+  grid.arrange(grobs = current_plots, ncol = 1) # Plotting
+}
+
+```
+
+Consistently with the findings from the categorical variables, we observed that the boxplots for 'FS' (Former Smokers) and 'CS' (Current Smokers) were generally similar, while noticeably different from the boxplots for 'NS' (Non-Smokers). However, there were a few exceptions in the case of the 'Age' and 'Height' variables. Notably, the current smokers displayed, on average, a lower age compared to former smokers, as well as a slightly higher height.
+
+```{r, out.width = "80%", dpi=72}
+grid.arrange(grobs = main_exeptions, ncol = 1, nrows = 2, 
+             top = "Numeric Variable Visualisation - exceptions")
+```
+
+```{r, echo = FALSE}
+par(mfrow = c(1, 1))
+```
+
+### Conclusions from the Data Visualisation
+
+Based on this first visualization of the Data, we draw two main conclusions.
+
+-   First, the data exhibits a relatively similar distribution between former smokers and current smokers. Consequently, we have made the decision to transform our problem into a **binary prediction** one: the goal will be to predict whether an individual has ever smoked or not, given certain health-related data.
+
+```{r, dpi=72}
+#Trasforming the TARGET into a binary variable
+original_target <- data_clean$Smoking
+data_clean$Smoking <- ifelse(data_clean$Smoking == 1, 0, 1)
+#visualisation of the new target distribution
+target_labels <- c("non-smoker (NS)", "former/current smoker (FCS)")
+label_colors <- c("non-smoker" = "white", "former/current smoker" = "grey")
+barplot(table(data_clean$Smoking), main = 'New target distribution', 
+        col = label_colors, names.arg = target_labels, border = "black")
+```
+
+-   Secondly, through the boxplot visualization, we observed that the data exhibited skewness. In order to address this issue, we decided to apply a **log transformation**. By taking the logarithm of the values, the data points are compressed towards the center, resulting in a more balanced and symmetrical distribution.
+
+```{r}
+#log transformation
+num_col <- setdiff(names(data_clean), c(cat_col, ordinal_col, 'Smoking'))
+data_before_transformation <- data_clean
+data_before_transformation$Smoking <- original_target
+data_clean[, num_col] <- log(data_clean[, num_col])
+```
+
+Here is a visualization of how the change affected one of our variable, as an example.
+
+```{r, dpi=72}
+before_and_after_plots <- list()
+before_and_after_plots[[1]] <- 
+      ggplot(data_before_transformation, 
+             aes(x = Smoking, y = Gamma_GTP, group = Smoking)) +
+      geom_violin(aes(fill = factor(Smoking)), trim = FALSE) +
+      geom_boxplot(width = 0.1, fill = "white", color = "black") +
+      labs(x = "Smoking", y = "", title = "Before") +
+      scale_fill_manual(values = c("white", "lightgrey", "grey"), 
+                        name = "",
+                        labels = c("NS(1)", "FS (2)", "CS (3)"))
+before_and_after_plots[[2]] <- 
+      ggplot(data_clean, aes(x = Smoking, y = Gamma_GTP, group = Smoking)) +
+      geom_violin(aes(fill = factor(Smoking)), trim = FALSE) +
+      geom_boxplot(width = 0.1, fill = "white", color = "black") +
+      labs(x = "Smoking", y = "", title = "After") +
+      scale_fill_manual(values = c("white", "grey"), 
+                        name = "",
+                        labels = c("NS(0)", "F/CS (1)"))
+grid.arrange(grobs = before_and_after_plots, ncol = 1, nrows = 2, 
+             top = "Example: Gamma_GTP transformation")
+```
+
+```{r, echo=FALSE}
+par(mfrow = c(1, 1))
+```
+
+# Training and Test split
+
+At this stage, we can proceed with the splitting of our dataset into training and test sets, by allocating 75% of the available data to the training set.
+
+```{r}
+set.seed(100)
+perc_test <- 0.25
+# divide the dataset in 75% train and 25% test
+index <- sample(1:nrow(data_clean), 
+                size = round((1-perc_test)*nrow(data_clean)), 
+                replace = FALSE)
+train <- data_clean[index, ]
+test <- data_clean[-index, ]
+```
+
+# Exploratory Data Analysis
+
+Our study then continued with a further exploration of the data, aiming to gain initial insights into the associations between variables and the target variable, as well as the relationships among the variables themselves. This exploration was divided into two parts: categorical and numeric variables, as the techniques employed for analysis differed accordingly. For both the measurements involved, namely Correlation and Yule's Q, we chose to plot only the absolute values. This decision was based on our intention to assess the overall measure of association between each variable and the target variable, rather than specifically searching for direct linear dependencies. By focusing on the absolute values, we aimed to gain an understanding of the strength of the association, regardless of the specific nature (direction) of the relationship.
+
+## Correlation Matrix (numerical)
+
+To explore the relationships between the numerical independent variables and the dependent target variable, we employed the Pearson correlation coefficient. Using the 'cor' function in R, we calculated the correlations and visualized them using the 'corplot' package.
+
+```{r, dpi=72}
+num_col <- setdiff(names(data_clean), c(cat_col, 'Smoking'))
+corr_matrix_numerical <-cor(train[, c(num_col, 'Smoking')])
+corrplot(corr_matrix_numerical, method = "number", diag = FALSE, number.cex = 0.4, tl.cex = 0.5,
+         type = "upper", tl.col = "black")
+```
+
+The graph presented below illustrates the absolute values of the correlations between the variables, highlighting those that exceed the thresholds of 0.05 and 0.1.
+
+```{r, dpi=72}
+numerical_correlations <- abs(corr_matrix_numerical[num_col, 'Smoking'])
+colors <- ifelse(numerical_correlations < 0.05, "red", 
+                ifelse(numerical_correlations < 0.1, "orange", "coral2"))
+
+barplot(numerical_correlations, col = colors, las = 2, cex.names = 0.7)
+abline(h = 0.05, col = "red", lty = "dashed")
+abline(h = 0.1, col = "orange", lty = "dashed")
+title(main = "Abs correlation values w.r.t the target")
+
+legend("top", legend = c("Correlation < 0.05", "0.05 <= Cor < 0.1", 
+                              "Cor >= 0.1"),
+       fill = c("red", "orange", "coral2"), bty = "n", cex = 0.7)
+```
+
+The following table displays the correlations found among numerical variables which values are greater than 0.5.
+
+```{r}
+#among each other
+sub_corr_matrix <- corr_matrix_numerical[num_col, num_col]
+# chose threshold here
+binary_matrix <- abs(sub_corr_matrix) > 0.5
+# Ignore correlations of a variable with itself
+diag(sub_corr_matrix) <- FALSE
+numeric_matrix <- binary_matrix * sub_corr_matrix
+#visualise in a table
+cor_table <- data.frame()
+for (i in 1:(nrow(numeric_matrix) - 1)) {
+  for (j in (i + 1):nrow(numeric_matrix)) {
+    if (numeric_matrix[i, j] != 0) {
+      var1 <- rownames(numeric_matrix)[i]
+      var2 <- rownames(numeric_matrix)[j]
+      cor_value <- numeric_matrix[i, j]
+      cor_table <- rbind(cor_table, c(var1, var2, cor_value))
+    }
+  }
+} 
+cor_table <- data.frame(Variable1 = cor_table[, 1], Variable2 = cor_table[, 2], 
+                        Correlation = cor_table[, 3])
+table_title <- "Highest Correlations between Variables"
+kable(cor_table, caption = table_title)
+```
+
+### Ordinal Variable
+
+Among the numerical variables, the "Urine_Protein" stands as an ordinal variable which assume numbers ranging from 1 to 6 only and measure the "excretion of protein in the urine" (directly translated from Korean) in an ascending order. We therefore analysed it a bit further.
+
+In the previous step we had already studied its correlation with the target, using the cor function. As already mentioned, the cor function in R computes the Pearson product-moment correlation coefficient, which measures the linear relationship between two numerical variables. In this case it should tell us the monotonic relationship between them. However, the interpretation of this coefficient can be challenging, as it assumes a linear relationship between the variables, which may not be our case.
+
+To further investigate the relationship we also tried to compute Cramer's V: a measure of association between two nominal variables, which gives a value between 0 and +1 (inclusive). It is based on Pearson's chi-squared statistic and was published by Harald Cramér in 1946. It can be used to understand the strength of the relationship between two categorical variables with two or more unique values per variable.
+
+Both of this tests resulted in a very low and similar measure, which we interpreted as a poor association between the two variables.
+
+```{r}
+CramerV(train$Urine_Protein, train$Smoking)
+corr_matrix_numerical["Urine_Protein", "Smoking"]
+```
+
+Since our binary variable is the dependent variable and the ordinal variable is the independent variable we also tried a very naive logistic regression test. The goal was to measure the effect of the ordinal variable on the probability of the binary outcome. We observed a very poor accuracy of 0.6257746 which suggests that the logistic regression model is not performing very well.
+
+```{r}
+log_model_urine <- glm(Smoking ~ Urine_Protein, data = train, family = binomial)
+test_urine <- predict(log_model_urine, newdata = test, type = "response") > 0.5
+accuracy_urine <- sum(test_urine == test$Smoking) / nrow(test)
+accuracy_urine
+```
+
+Moreover, we noticed how the ratio between the number of 0s and the total number of values in the Smoking variable was of 0.6246759, very close to the accuracy, which suggests that the model may be biased towards predicting the majority class.
+
+```{r}
+table(train$Smoking)[1]/sum(table(train$Smoking))
+```
+
+Indeed, that was exactly what the model was doing, predicting only 825 1s over a total of 245924 occurrences in the test set. This means that the independent variable is not enough informative to improve the prediction of the dependent variable with respect to a random choice. We concluded that our only ordinal variable is not highly associated with our target and we aspect it to be dropped during the inferential part of the study.
+
+```{r}
+table(ifelse(test_urine == TRUE, 1, 0))
+```
+
+## Yule's Q (categorical)
+
+In regard to the categorical variables, given their binary nature akin to our target variable, we opted to employ Yule's Q parameter as a measure of association. Yule's Q captures the strength and direction of association between binary variables and is a distribution-free statistic.
+
+```{r}
+cat_col <- c("Gender_Code", "Drinking", "Left_Hearing", "Right_Hearing")
+odds_values <- list()
+yules_q_values <- list()
+for (col in cat_col) {
+  cont_table <- table(train$Smoking, train[,col])
+  a <- cont_table[1, 1]
+  b <- cont_table[1, 2]
+  c <- cont_table[2,1]
+  d <- cont_table[2,2]
+  odds_rat <- (a/b)*(d/c)
+  odds_values <- c(odds_values, odds_rat)
+  yule_q <- (odds_rat - 1) / (odds_rat + 1)
+  yules_q_values <- c(yules_q_values, yule_q)
+}
+odds_values <- unlist(odds_values)
+yules_q_values <- unlist(yules_q_values)
+```
+
+We can visualize the association strengths in the following plot:
+
+```{r, dpi=72}
+plot_yules(yules_q_values, cat_col)
+```
+
+This study of correlation, conducted using Yule's Q measure, revealed a strong association between the Gender_Code variable and the target variable, with a Yule's Q value of approximately 0.9534. This high correlation raised concerns about the potential influence on our models during the inferential phase. Therefore, we addressed this issue meticulously during the feature selection process.
+
+## Gender_Code deepening
+
+During the Exploratory Data Analysis, we observed a significant correlation between the Gender_Code variable and our target variable. This raised concerns that the predictive model might heavily rely on this variable, overshadowing the importance of other independent variables. While such a model could yield satisfactory performance, it would hinder our ability to interpret the data and address the underlying problem effectively. To investigate this further, we decided to test a naive generalized model to assess the behavior of the Gender_Code variable.
+
+```{r}
+logistic.out <- glm(train$Smoking ~ ., family = binomial, data=train)
+summary(logistic.out) 
+logistic.prob <- predict(logistic.out, type="response", newdata=test)
+
+logistic.scores <- accuracy_and_scores(logistic.prob)
+print(paste("Accuracy naive model", logistic.scores[[1]])) 
+```
+
+As expected we obtained a very satisfactory accuracy of about 0.8168. However, it is important to recall that if the model were to predict only the major class in a naive manner, the accuracy would already be 0.6246, as previously observed.
+
+Upon closer examination, we observed that the values of all variables' estimated coefficients, including the intercept, is significantly low, except for the Gender_Code variable. This underscores the fact that Gender_Code is the most - if not the only - influential variable in predicting the target output. To further investigate this, we conducted an additional test using another, even more naive, glm model that exclusively included the Gender_Code variable. In this scenario, we expected that obtaining a very similar score would validate our hypothesis that the intercept and gender overshadow the influence of all other variables.
+
+```{r}
+logistic.out <- glm(train$Smoking ~ Gender_Code, family = binomial, data=train)
+summary(logistic.out) 
+logistic.prob <- predict(logistic.out, type="response", newdata=test)
+
+logistic.scores <- accuracy_and_scores(logistic.prob)
+print(paste("Accuracy model with only Gender_Codel", logistic.scores[[1]])) 
+```
+
+As expected, the accuracy of the model decreased by approximately 0.003 compared to the full naive model. This compellingly demonstrates that including the Gender_Code variable does not contribute meaningful information to the model. Consequently, we proceed with the inferential part of the project by excluding the Gender variable altogether.
+
+```{r}
+train <- train[ , !(names(train) %in% c('Gender_Code'))]
+test <- test[ , !(names(test) %in% c('Gender_Code'))]
+```
+
+# Inferential Statistics
+
+We found the descriptive statistics to be informative, providing insights into the categorical, ordinal, and numerical variables, along with their distributions and correlations, particularly with the target variable. Encouraged by these findings, we proceeded to inferential statistics with the same objective of the very start: predicting whether an individual has ever smoked or not based on specific health indicators. We conducted variable selections and tested and compared various models in order to address this question effectively.
+
+## Variable Selection
+
+Before delving into model selection, we decided that was crucial to assess the necessity of all variables in our study. Our objective was to create a model that accurately describes our data and generalizes effectively. However, we must ensure that only relevant features were included to facilitate the interpretation process and yield clearer results.
+
+### V.I.F.
+
+We began by employing the Variance Inflation Factor (VIF) measurement, in order to obtain valuable insights on the multicollinearity present among the variables.
+
+```{r}
+mod.out <- lm(train$Smoking ~ ., data=train)
+#summary(mod.out)
+vif(mod.out)
+train_before_VIF <- train
+# too much interaction effect (slides says that it cannot go over 5 or 10 :') )
+while (TRUE){
+  mod.out <- lm(train$Smoking ~ ., data=train)
+  coll_max <- max(vif(mod.out))
+  i_max <- which.max(vif(mod.out))
+  
+  if (coll_max > 5){
+    print(paste(names(train)[i_max], "variable was removed"))
+    num_col<- num_col[num_col!= names(train)[i_max]]
+    train <- train[,-i_max]
+    test <- test[,-i_max]
+  } 
+  else {break}
+}
+rm(coll_max, i_max)
+#summary(mod.out)
+vif(mod.out)
+```
+
+During that process, we removed the "Weight" variable, since the VIF referred to that predictor is greater than 5. This is consistent with our Exploratory Analysis results, as in table 2 "Weight" variable appeared to be highly correlated with both "Height" and "Waist_Circ". Indeed, these predictors' VIF values decreased after the removal.
+
+```{r}
+cor_table[1:2,]
+```
+
+## Models
+
+After selecting the 17 variables required for our prediction study, we continued by selecting the best model. To guide our analysis and decision-making process, we considered different performance metrics such as AUC, F1 score and accuracy.
+
+### Logistic model
+
+Given the binary nature of our target, our first model implemented was the logistic regression, which is the binomial generalized linear model (binomial GLM). The fundamental assumption in logistic regression is that the log-odds of the response variable being in a particular category - in our case either being a Non-Smoker (0) or being a Former/Current Smoker (1) - can be expressed as a linear combination of the independent variables. The link function used is the logistic function (also known as the sigmoid function), which transforms the linear combination of predictors into a range of probabilities between 0 and 1. Therefore, based on the health related data of a person, the model estimates their probability of having ever smoked or not.
+
+```{r}
+logistic.out <- glm(train$Smoking ~ ., family = binomial, data=train)
+summary(logistic.out) 
+
+# predict the expected value (probability)
+logistic.prob <- predict(logistic.out, type="response", newdata=test)
+
+best_acc <- 0
+# compute the accuracy for some thresholds
+for (t in seq(0.4, 0.6, length=17)){
+  acc <- accuracy_and_scores(logistic.prob, threshold=t)[[1]]
+  # print(paste(t, ': ', acc))
+  if (acc > best_acc){
+    best_acc <- acc
+    best_threshold <- t
+  }
+}
+
+logistic.scores <- accuracy_and_scores(logistic.prob, threshold=best_threshold)
+print(paste("With threshold ", best_threshold, 
+            " we get the best accuracy: ", best_acc))
+```
+
+#### Summary interpretation
+
+The above summary provides important information about the estimated coefficients, standard errors, z-values and p-values of the predictor variables in the model. We needed these values to interpret the strength and significance of the association between the predictor variables and the binary outcome.
+
+-   **p_values**
+
+    We noticed that all predictor variables - except for Left_Eye, Right_Eye and Urine_Protein - are statistically significant (associated with p-values \< 0.05). As for the Urine_Protein variable, we were not surprised to see that there is not enough statistical evidence to reject null hypothesis, that is there is no association between the predictor variable and the response variable (therefore the coefficient is close to zero), as we already noticed it was poorly associated with our target. Nevertheless, from the EDA, we rather expected variables like the Hearing related one or the Systolic_BP to have a low p_value, instead of the sight related ones. Our interpretation was that these variables are poorly associated if compared alone with the target, but in a more complex model are playing a relevant role in predicting the dependent variable's outcomes.
+
+-   **estimate coefficients**
+
+    The coefficients for the predictor variables represent the estimated effect of each variable on the log odds of smoking. For example, an increase in Age by one unit is associated with an increase in the log odds of smoking by 1.087 units, holding all other variables constant. Them being in a not too different order of magnitude (in absolute values) means that information is spread all over the model's predictors, which is a good result as there is not a single variable way more predominant over the other.
+
+#### ROC curve
+
+The ROC (Receiver Operating Characteristic) curve is a graphical representation of the performance of a binary classification model. It plots the true positive rate (sensitivity) against the false positive rate (1 - specificity) at various threshold settings. We decided to used it as a graphical interpretation of our models performance as it provides a comprehensive view of the model's discriminatory power across different threshold values.
+
+```{r, message=F, warning=F, dpi=72}
+roc.out.log <- roc(test$Smoking, logistic.prob)
+
+plot(roc.out.log,  print.auc=TRUE, legacy.axes=TRUE, xlab="False positive rate", 
+     ylab="True positive rate", type = "s", col = "blue", lwd = 2, 
+     auc.polygon = TRUE, main = "Logistic")
+coords <- coords(roc.out.log, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+As previously said, studying the p-value, we found out that the three features 'Left_Eye', 'Right_Eye' and 'Urine_Protein' are not significant for the model. Therefore we implemented a backward stepwise elimination: a method used to select the most important variables in a statistical model. Starting with a model that included all predictor variables, we systematically removed the least significant variables until a desired level of simplicity or significance was achieved. This process helps to simplify the model and improve its interpretability by focusing on the most influential variables.
+
+### Backward features selection
+
+```{r}
+train_logistic <- train
+test_logistic <- test
+p_values <- c()
+while (TRUE){
+  mod.out <- glm(train_logistic$Smoking ~ ., family=binomial, data=train_logistic)
+  p_value_max <- max(summary(mod.out)$coefficients[-1, 'Pr(>|z|)'])
+  i_max <- which.max(summary(mod.out)$coefficients[-1, 'Pr(>|z|)'])
+  
+  if (p_value_max > 0.05){
+    print(paste(names(train_logistic)[i_max], 
+                "variable was removed since had a p_value of: ", 
+                p_value_max))
+    p_values <-  c(p_values, p_value_max)
+    train_logistic <- train_logistic[,-i_max]
+    test_logistic <- test_logistic[,-i_max]
+    
+  } 
+  else {break}
+}
+rm(p_value_max, i_max)
+
+```
+
+This gave us insight on the fact that probably the sight is not really correlated to the smoking status of a person, as well as the urine protein value, as previously mentioned.
+
+```{r, dpi=72}
+removed_df <- data.frame(Corr_with_Target = c(
+                            corr_matrix_numerical["Urine_Protein", "Smoking"],
+                                          yules_q_values[3],
+                                          yules_q_values[2]),
+                         p_values = p_values,
+                row.names = c("Urine_Protein", "Right_Hearing", "Left_Hearing"))
+kable(removed_df, align = c("c", "l"), digits = 4) 
+```
+
+```{r}
+summary(mod.out)
+
+logistic.prob <- predict(mod.out,type="response", newdata=test_logistic)
+
+logistic.rem.scores <- accuracy_and_scores(logistic.prob, threshold=best_threshold)
+
+logistic_accuracy_rem <- logistic.rem.scores[[1]]
+logistic_accuracy_rem
+
+cat("Loss in accuracy: ", best_acc - logistic_accuracy_rem) 
+```
+
+This model has demonstrated good performance, achieving an accuracy of nearly 0.8 and experiencing a negligible loss of only 1.626519e-05 compared to the full model. Furthermore, it is easier to interpret as it relies on only 14 variables (in addition to the intercept).
+
+```{r, message=F, warning=F, dpi=72}
+roc.out.log.back <- roc(test_logistic$Smoking, logistic.prob)
+
+plot(roc.out.log.back,  print.auc=TRUE, legacy.axes=TRUE, 
+     xlab="False positive rate", ylab="True positive rate", type = "s", 
+     col = "blue", lwd = 2, auc.polygon = TRUE, main = "Logistic removed")
+coords <- coords(roc.out.log.back, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+## Shrinkage methods
+
+We then applied shrinkage methods, specifically Ridge and Lasso, to our dataset. These methods are designed to address two common challenges encountered in regression analysis, namely multicollinearity and overfitting. Both Ridge regression and Lasso regression introduce a penalty term to the ordinary least squares (OLS) objective function, which helps regulate the complexity of the model and alleviate the effects of multicollinearity.
+
+A brief description of the two methods is the following:
+
+-   Ridge regression:
+
+    this method incorporates a penalty term that is proportionate to the sum of squared coefficients, effectively shrinking the coefficients towards zero while still allowing them to have non-zero values. This results in more stable coefficient estimates, reducing the impact of multicollinearity and enhancing the performance of the model.
+
+-   Lasso regression:
+
+    this method introduces a penalty term proportional to the sum of the absolute values of the coefficients. This approach not only shrinks the coefficients towards zero but also performs variable selection by setting some coefficients exactly to zero. Lasso regression effectively identifies and excludes irrelevant predictors from the model, providing a concise solution that includes only the most important predictors.
+
+Even though multicollinearity and overfitting may not be significant concerns in our models, it is still valuable to explore whether Ridge and Lasso regression can yield improved performance compared to other models.
+
+#### Creation of model matrices
+
+We created two model matrices with our test and train dataframes (i.e. a matrix where the first column is made of ones and the others are the columns of the dataframe, where dummy variables are created for categorical columns) in order to implement the functions of the Ridge and the Lasso.
+
+```{r}
+# model matrix 
+X_train <- model.matrix(Smoking~., data=train) 
+y_train <- train$Smoking
+X_test <- model.matrix(Smoking~., data=test)
+y_test <- test$Smoking
+```
+
+### Ridge regression
+
+For the implementation of the previously described models, we needed to create a grid for the hyperparameters that are used into the models.
+
+#### Hyperparameter lambda selection
+
+Here we tested different grids in order to find the best hyperparameters.
+
+```{r, message = FALSE, dpi=72}
+grid <- exp(seq(4, -4, length = 100))
+
+ridge.mod <- cv.glmnet(X_train, y_train, alpha=0, family="binomial", 
+                       type.measure ="class", lambda = grid)
+plot(ridge.mod)
+```
+
+The misclassification error is an increasing function, thus we decided to study a previous interval of lambda to search for a minimum.
+
+```{r, dpi=72}
+grid <- exp(seq(-4, -6, length = 20))
+
+ridge.mod <- cv.glmnet(X_train, y_train, alpha=0, family="binomial", 
+                       type.measure ="class", lambda = grid)
+plot(ridge.mod)
+
+lambda <- ridge.mod$lambda.min
+```
+
+The minimum of the misclassification error found is for log($\lambda$) around -5.26. Also, it is evident from the plot that the confidence interval around the minimum point encompasses all lambda values between $e^{-6}$ and $e^{-4}$.
+
+```{r, message=F, warning=F, dpi=72}
+ridge.prob <- predict(ridge.mod, s=lambda, newx=X_test, type="response")
+
+ridge.scores <- accuracy_and_scores(ridge.prob, threshold = best_threshold)
+
+ridge_accuracy <- ridge.scores[[1]] 
+
+roc.out.ridge <- roc(y_test, ridge.prob)
+
+plot(roc.out.ridge,  print.auc=TRUE, legacy.axes=TRUE, xlab="False positive rate", 
+     ylab="True positive rate", type = "s", col = "blue", lwd = 2, 
+     auc.polygon = TRUE, main = "Ridge Loss")
+coords <- coords(roc.out.ridge, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+By taking into account the ROC curve and accuracy measure, we have concluded that applying Ridge regression with a logit link function does not provide substantial benefits compared to the initial full model or the subsequent reduced model.
+
+### Lasso regression
+
+```{r, message=FALSE, warning=FALSE}
+grid <- exp(seq(-2, -8, length = 100))
+
+lasso.mod <- cv.glmnet(X_train, y_train, alpha=1, family="binomial", 
+                    type.measure ="class", lambda = grid)
+plot(lasso.mod)
+lambda <- lasso.mod$lambda.min
+
+lasso.prob <- predict(lasso.mod, s=lambda, newx=X_test, type="response")
+
+lasso.scores <- accuracy_and_scores(lasso.prob)
+
+lasso_accuracy <- lasso.scores[[1]] 
+```
+
+The lambda value that minimizes the misclassification error leads to a model in which 3 features' coefficients are shrinked to zero. We anticipated it to be similar to our Backward features selection: indeed both models are discarding sight related and Urine_Protein features as they are not essential for the prediction task.  
+
+```{r}
+coef(lasso.mod)
+```
+Below is displayed the ROC curve obtained by using the lambda that minimize misclassification error.
+
+``` {r, message=F, warning=F, dpi=72}
+roc.out.lasso <- roc(y_test, lasso.prob)
+
+plot(roc.out.lasso,  print.auc=TRUE, legacy.axes=TRUE, xlab="False positive rate", 
+     ylab="True positive rate", type = "s", col = "blue", lwd = 2, 
+     auc.polygon = TRUE, main = "Lasso Loss")
+coords <- coords(roc.out.lasso, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+
+### LDA 
+
+Linear Discriminant Analysis (LDA) is a statistical technique used for dimensionality reduction and classification. It aims to find a linear combination of predictor variables that maximizes the separation between different classes or groups in the data.
+
+LDA assumes that the data follow a Gaussian distribution and that the classes have equal covariance matrices. For this reason, we started by studying the normality over our independent variables.
+
+### Normality check
+
+To investigate over the Discriminant Analysis model's assumptions, we studied the normality through the qqplots.
+
+```{r, dpi=72}
+par(mfrow = c(1, 2))
+qqnorm(train[,'Waist_Circ'], main= col)
+qqline(train[,'Waist_Circ'])
+
+qqnorm(train[,'Blood_Sugar'], main= col)
+qqline(train[,'Blood_Sugar'])
+par(mfrow = c(1, 1))
+```
+
+By analysing the plots displayed above, it was evident that not all the predictors follow a normal distribution. This does not mean that we cannot use a Discriminant Analysis model, but only that we are not guaranteed to find a good estimation. With regards to the categorical variables, we know that theoretically the LDA model is done for continuous variable approximately normal, nevertheless we implemented the method to see how it performs.
+
+```{r, message=F}
+lda.fit <- lda(train$Smoking~.,data=train)
+lda.fit # contains all the info about our model
+
+lda.pred <- predict(lda.fit, test)
+lda.class <- lda.pred$class
+
+lda.scores <- accuracy_and_scores(lda.class, probability = FALSE, threshold = best_threshold)
+
+lda_accuracy <- lda.scores[[1]]
+lda_accuracy
+
+lda.prob <- apply(lda.pred$posterior, 1, max)
+```
+
+Upon examining the coefficients, we observed that the highest coefficient corresponds to the Height variable, followed by Hemoglobin. This finding aligns with our earlier observation during the Exploratory Analysis, where these two variables exhibited the strongest correlation with the target variable. Furthermore, we noted that the eye-related features, and even more Urine_Protein feature, had the lowest coefficient values. This suggests that the model effectively captures the interrelationships between the variables. Nevertheless, it is important to note that the accuracy and AUC obtained with the Discriminant Analysis model are lower compared to the logistic model. We addressed this poor performance to the fact that the normality assumption of our variables was not respected.
+
+```{r, message=F, dpi=72}
+roc.out.lda <- roc(y_test, lda.prob)
+auc(roc.out.lda)
+
+plot(roc.out.lda,  print.auc=TRUE, legacy.axes=TRUE, xlab="False positive rate", 
+     ylab="True positive rate", type = "s", col = "blue", lwd = 2, 
+     auc.polygon = TRUE, main = "LDA Loss")
+coords <- coords(roc.out.lda, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+### QDA
+
+Quadratic Discriminant Analysis (QDA) is similar to Linear Discriminant Analysis (LDA).  However, unlike LDA, QDA relaxes the assumption of equal covariance matrices across classes and allows for different variances and covariances for each class. As a result, the number of parameters in the model significantly increases. Nonetheless, the metrics computed for QDA, including accuracy and AUC, indicate worse performance compared to LDA.
+
+```{r, message=F, dpi=72}
+qda.fit <- qda(train$Smoking~.,data=train)
+qda.fit # contains all the info about our model
+
+qda.pred <- predict(qda.fit, test)
+qda.class <- qda.pred$class
+
+qda.scores <- accuracy_and_scores(qda.class, probability = FALSE, threshold = best_threshold)
+
+qda_accuracy <- qda.scores[[1]]
+qda_accuracy
+
+qda.prob <- apply(qda.pred$posterior, 1, max)
+
+roc.out.qda <- roc(y_test, qda.prob)
+auc(roc.out.qda)
+
+plot(roc.out.qda,  print.auc=TRUE, legacy.axes=TRUE, xlab="False positive rate", 
+     ylab="True positive rate", type = "s", col = "blue", lwd = 2, 
+     auc.polygon = TRUE, main = "QDA Loss")
+coords <- coords(roc.out.qda, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+### Naive Bayes
+
+A Naive Bayes model is a statistical classification algorithm that utilizes Bayes' theorem to estimate the probability of an observation belonging to a specific class or category. The model operates under the assumption that all predictor variables are independent of each other, hence the term "naive". Despite this assumption, Naive Bayes models can still demonstrate satisfactory performance in practical scenarios, particularly when the independence assumption holds reasonably well or when dealing with high-dimensional data. However, given that all our variables for each observation pertain to the same individual, assuming their independence was according to us a too strong assumption. Thus, we anticipated the Naive Bayes model to exhibit poorer performance. 
+
+```{r, message=F, dpi=72}
+nb.fit <- naiveBayes(train$Smoking~., data=train)
+#nb.fit
+
+nb.class <- predict(nb.fit, test)
+
+nb.scores <- accuracy_and_scores(nb.class, probability = FALSE, threshold = best_threshold)
+
+nb_accuracy <- nb.scores[[1]]
+nb_accuracy
+
+nb_probs <- predict(nb.fit, test, type = "raw")
+nb.prob <- apply(nb_probs, 1, max)
+
+roc.out.nb <- roc(y_test, nb.prob)
+auc(roc.out.nb)
+
+plot(roc.out.nb,  print.auc=TRUE, legacy.axes=TRUE, xlab="False positive rate", 
+     ylab="True positive rate", type = "s", col = "blue", lwd = 2, 
+     auc.polygon = TRUE, main = "Naive Bayes Loss")
+coords <- coords(roc.out.nb, x="best")
+opt_thr <- coords$threshold
+abline(v = opt_thr, col = "red", lty = 2)
+```
+
+### KNN (unfeasible)
+
+As the final model in our model selection study, we want to implement the K-nearest neighbors (KNN) model, renowned for its capability to make predictions based on the proximity of instances in the feature space. KNN is a non-parametric classification algorithm that predicts the class label of a data point by considering the majority vote of its K nearest neighbors. To determine the neighbors of an observation, the algorithm measures the distance between that data point and the other points in the feature space. The label that appears most frequently among its neighbors is assigned to the specific point. 
+However, due to the computational limitations imposed by our machines and the large size of our dataset, implementing this model became unfeasible for us. Nevertheless, our expectations for this model were already modest, which is why we considered it as the last option. We were aware that K-nearest neighbors (KNN) exhibits remarkable simplicity in solving nonlinear problems in low-dimensional spaces. However, we also recognized that its runtime tend to suffer when dealing with larger and higher-dimensional problems (such as ours). On top of that, we believe that, in high-dimensional spaces, the notion of distance between points becomes less meaningful, leading to a breakdown in performance.
+
+## Models Comparison
+
+### ROC Curves
+
+In order to study the overall performance of our models, we plotted the ROC curve for each of them.
+
+```{r, dpi=72}
+
+plot(roc.out.log, col = "red",
+     xlab = "False Positive Rate", ylab = "True Positive Rate",
+     main = "ROC Curves", legacy.axes=TRUE, ly = 1)
+plot(roc.out.lda, col = "purple", add = TRUE, legacy.axes=TRUE)
+plot(roc.out.qda, col = "green", add = TRUE, legacy.axes=TRUE)
+plot(roc.out.nb, col="orange", add= TRUE, legacy.axes=TRUE)
+
+
+
+legend("bottomright", legend = c("Logistic", "Logistic Backward", "Ridge", 
+                                 "Lasso", "LDA", "QDA", "NB"),
+       col = c("red", "red", "red", "red", "purple", "green", "orange"), 
+       lwd = 2, cex = 0.8)
+```
+
+### Scores results
+
+```{r, dpi=72}
+scores <- data.frame(
+
+Model = c("Logistic", "Logistic Backward", "Ridge", "Lasso", "LDA", "QDA", "NB"),
+Accuracy = c(logistic.scores[[1]], logistic.rem.scores[[1]], ridge.scores[[1]],
+      lasso.scores[[1]], lda.scores[[1]], qda.scores[[1]], nb.scores[[1]]),
+TPR = c(logistic.scores[[2]], logistic.rem.scores[[2]], ridge.scores[[2]],
+          lasso.scores[[2]], lda.scores[[2]], qda.scores[[2]], nb.scores[[2]]),
+TNR = c(logistic.scores[[3]], logistic.rem.scores[[3]], ridge.scores[[3]],
+           lasso.scores[[3]], lda.scores[[3]], qda.scores[[3]], nb.scores[[3]]),
+Precision = c(logistic.scores[[4]], logistic.rem.scores[[4]], ridge.scores[[4]],
+           lasso.scores[[4]], lda.scores[[4]], qda.scores[[4]], nb.scores[[4]]),
+Recall = c(logistic.scores[[5]], logistic.rem.scores[[5]], ridge.scores[[5]],
+          lasso.scores[[5]], lda.scores[[5]], qda.scores[[5]], nb.scores[[5]]),
+F1_Score = c(logistic.scores[[6]], logistic.rem.scores[[6]], ridge.scores[[6]],
+            lasso.scores[[6]], lda.scores[[6]], qda.scores[[6]], nb.scores[[6]])
+  )
+kable(scores, digits = 4, format.args = list(scientific = FALSE), 
+      booktabs = TRUE, longtable = FALSE)
+```
+
+We chose to focus mainly in 3 different measures to assess the goodness of our model: - Precision: to ensure that the positive predictions are accurate - Recall: to capture as many smokers as possible - AUC: to provide an overall assessment of the model's ability to distinguish between smokers and non-smokers.
+
+```{r}
+scores$Model <- factor(scores$Model, levels = scores$Model)
+
+plot_performance_metric <- function(metric_name) {
+  scores$Is_Best <- ifelse(scores[[metric_name]] == max(scores[[metric_name]]), "Best", "Other")
+  ggplot(scores, aes(x = Model, y = !!sym(metric_name), fill = Is_Best)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("Best" = "red", "Other" = "grey")) +
+    labs(title = metric_name, x = "", y = "") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+plot_accuracy <- plot_performance_metric("Accuracy")
+plot_precision <- plot_performance_metric("Precision")
+plot_recall <- plot_performance_metric("Recall")
+plot_f1_score <- plot_performance_metric("F1_Score")
+
+gridExtra::grid.arrange(plot_accuracy, plot_precision, plot_recall, plot_f1_score, ncol = 2)
+```
+
+# Conclusions
+
+In conclusion, we think that we can thrive two main points from our stastistical survey. 
+
+The first one is the one concerning the gender of people involved in this study. The extremely high correlation between being male and being a smoker in our dataset forced us to not take this information into account so to have a clearer understand on how smoking affects the most someone's health. However, we suggest that it could be a very interesting area of research to try to understand if there are statistically relevant social characteristics that could explain the reasons behind this correlation. Another finding we noticed is that drinkers are much more likely to be smokers or have been smokers in the past. Nevertheless, we decided to keep this information as we found it to be very informative without being as obscuring as gender. 
+
+The second is that almost all variables proved to be highly effected from smoking habit, but for eye-reletad and the protein production in the urine. We assume this happens because there is no direct anatomical connection between the organs involved while smoking and the latter two. What is most striking, however, is that most of the other aspects studied concerning human health are strongly affected and therefore damaged.
+
+It's important to note that this report is based on the available data and specific analytical methods utilized during the investigation. Future studies may benefit from expanding the dataset to people of other nationalities or cultures or employing different measures of health conditions, such as those related to the respiratory system.
+
