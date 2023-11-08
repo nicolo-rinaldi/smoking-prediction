@@ -1,4 +1,4 @@
-# smoking-prediction
+# Prediction of smoking status given medical features
 
 (Project made together with Daniele Barolo and Camilla Colanero from the Statistical Learning course at UniPd, held by proessor Alberto Roverato)
 
