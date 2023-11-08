@@ -1,4 +1,7 @@
 # smoking-prediction
+
+(Project made together with Daniele Barolo and Camilla Colanero from the Statistical Learning cource at UniPd, held by proessor Alberto Roverato)
+
 This project centers around a binary classification problem involving the prediction of an individual’s smoking history based on various health measurements. Smoking is a significant public health concern worldwide, contributing to a wide range of adverse health outcomes, including respiratory diseases, cardiovascular problems, and cancer. According to global statistics, smoking is responsible for millions of deaths each year and is a leading cause of preventable diseases.
 This project seeks to develop a predictive model that utilizes medical and personal data variables to determine whether an individual has ever smoked or not. By analyzing a dataset comprising health measurements and smoking history information, we aim to identify key indicators that can accurately classify individuals based on their smoking status.
 Accurate prediction models can provide valuable insights into the factors influencing smoking behavior and enable healthcare professionals to identify individuals at risk of smoking-related health issues. This research may contribute to the development of effective prevention and cessation programs tailored to specific populations, ultimately improving public health outcomes and reducing the burden of smoking-related diseases.
